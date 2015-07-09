@@ -212,3 +212,12 @@ Add the subdomain hubot should connect to. If you web URL looks like
 
 You may want to get comfortable with `heroku logs` and `heroku restart` if
 you're having issues.
+
+
+### HUBOT_HEROKU_KEEPALIVE_URL setup to do..
+connect to heroku site on your app.
+go to settings tab.
+'click Reveal Config Vars'
+When list of Config Vars, click 'Edit' and click +(plus) button.
+put Key like 'HUBOT_HEROKU_KEEPALIVE_URL'
+and value is your hubot URL in Heroku 'eg) 'https://hso-bot.herokuapp.com/'

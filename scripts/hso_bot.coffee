@@ -19,7 +19,7 @@
 #  "soupselect": "0.2.0",
 #  "underscore": "1.8.3",
 #  "underscore.string": "3.1.1"
-#  "heroku-self-ping": "1.1.1"
+#  "heroku-self-ping": "1.1.1" (deprecated... it makes force stop in heroku dyno...)
 #
 # Configuration:
 #   NOTING
@@ -45,7 +45,7 @@ _s          = require("underscore.string")
 Select      = require("soupselect").select
 HTMLParser  = require("htmlparser")
 
-require('heroku-self-ping')("https://hso-bot.herokuapp.com/")
+#require('heroku-self-ping')("https://hso-bot.herokuapp.com/")
 
 module.exports = (robot) ->
 
@@ -71,13 +71,27 @@ module.exports = (robot) ->
 
   #봇 호출 선언 부
   robot.respond /show commands/i, (response) ->
-    resultTxt ="
-1. startNaver                 : 네이버 실시간 검색어 스케쥴링 시작.\n
-2. stopNaver                  : 네이버 실시간 검색어 스케쥴링 중지.\n
-3. set interval time '$time'\n                              : 네이버 실시간 검색어 스케쥴링 시간 설정 (단위:ms).\n
-4. get interval time          : 네이버 실시간 검색어 스케쥴링 시간 확인.\n
-5. show naver                 : 네이버 실시간 검색어 조회.\n
-6. search '$searchEngine' '$keyword' \n                              : 웹 서치 ex) search google jjaekjjaek.\n
+    resultTxt ="\n
+1. startNaver\n
+-> 네이버 실시간 검색어 스케쥴링 시작.\n\n
+
+2. stopNaver\n
+-> 네이버 실시간 검색어 스케쥴링 중지.\n\n
+
+3. set interval time '$time'\n
+-> 네이버 실시간 검색어 스케쥴링 시간 설정 (단위:ms).\n\n
+
+4. get interval time\n
+-> 네이버 실시간 검색어 스케쥴링 시간 확인.\n\n
+
+5. show naver\n
+-> 네이버 실시간 검색어 조회.\n\n
+
+6. search '$searchEngine' '$keyword' \n
+-> 웹 서치 ex) search google jjaekjjaek.\n\n
+
+7. run time\n
+-> hso-bot이 살아 숨쉬고 있는 시간.\n\n
 "
     response.reply resultTxt
 
@@ -132,6 +146,9 @@ module.exports = (robot) ->
     else
       response.reply searchResult
 
+
+  robot.respond /run time/i, (response) ->
+    response.reply ""
 
 
   # 자체 함수 선언 부
@@ -368,7 +385,7 @@ xml2jsonCurrentWth = (nx, ny, robot) ->
   #     alert '다시 시도해주세요.\n' + 'code:' + request.status + '\n' + 'message:' + request.responseText + '\n' + 'error:' + error
   #     return
 
-  
+
   robot.http(fileName)
     .get() (err, res, body) ->
       json = JSON.parse(body)
