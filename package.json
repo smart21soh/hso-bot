@@ -22,7 +22,7 @@
     "soupselect": "0.2.0",
     "underscore": "1.8.3",
     "underscore.string": "3.1.1",
-    "heroku-self-ping": "1.1.1"
+    "redis": "0.12.1"
   },
   "engines": {
     "node": "0.10.x"

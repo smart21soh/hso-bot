@@ -44,30 +44,97 @@ _           = require("underscore")
 _s          = require("underscore.string")
 Select      = require("soupselect").select
 HTMLParser  = require("htmlparser")
+Redis       = require("redis")
+Url         = require("url")
 
 #require('heroku-self-ping')("https://hso-bot.herokuapp.com/")
+
+apikey = process.env.WEATHER_API_TOKEN
 
 module.exports = (robot) ->
 
   #지역 변수들 선언
-  intervalObject = null
-  intervalTime = 1800000
-  numuricPattern = new RegExp /^\d+$/
+  intervalObject  = null
+  intervalTime    = 1800000
+  numuricPattern  = new RegExp /^\d+$/
+  brainKey        = "hubot:brain"
+  memberKey       = "hubot:member"
+########################################################################################################################################################
 
-  robot.hear /q/i, (response) ->
-    robot.http("http://www.telize.com/geoip?")
-      .get() (err, res, body) ->
-        json = JSON.parse(body)
-        switch res.statusCode
-          when 200
-            lot = json.longitude
-            lat = json.latitude
-            rs = dfs_xy_conv("toXY", lat, lot)
-            #response.send xml2jsonCurrentWth(rs.nx, rs.ny, robot)
-            console.log xml2jsonCurrentWth(rs.nx, rs.ny, robot)
-          else
-            response.send "There was an error getting external IP (status: #{res.statusCode})."
+  #redis init
+  redisUrl = if process.env.REDISTOGO_URL?
+               redisUrlEnv = "REDISTOGO_URL"
+               process.env.REDISTOGO_URL
+             else if process.env.REDISCLOUD_URL?
+               redisUrlEnv = "REDISCLOUD_URL"
+               process.env.REDISCLOUD_URL
+             else if process.env.BOXEN_REDIS_URL?
+               redisUrlEnv = "BOXEN_REDIS_URL"
+               process.env.BOXEN_REDIS_URL
+             else if process.env.REDIS_URL?
+               redisUrlEnv = "REDIS_URL"
+               process.env.REDIS_URL
+             else
+               'redis://localhost:6379'
 
+  if redisUrlEnv?
+    robot.logger.info "hubot-redis-brain: Discovered redis from #{redisUrlEnv} environment variable"
+  else
+    robot.logger.info "hubot-redis-brain: Using default redis on localhost:6379"
+
+
+  info   = Url.parse redisUrl, true
+  client = if info.auth then Redis.createClient(info.port, info.hostname, {no_ready_check: true}) else Redis.createClient(info.port, info.hostname)
+  prefix = info.path?.replace('/', '') or 'hubot'
+
+  robot.brain.setAutoSave false
+
+  getData = ->
+    client.get "#{prefix}:storage", (err, reply) ->
+      if err
+        throw err
+      else if reply
+        robot.logger.info "hubot-redis-brain: Data for #{prefix} brain retrieved from Redis"
+        robot.brain.mergeData JSON.parse(reply.toString())
+      else
+        robot.logger.info "hubot-redis-brain: Initializing new data for #{prefix} brain"
+        robot.brain.mergeData {}
+
+      robot.brain.setAutoSave true
+
+  if info.auth
+    client.auth info.auth.split(":")[1], (err) ->
+      if err
+        robot.logger.error "hubot-redis-brain: Failed to authenticate to Redis"
+      else
+        robot.logger.info "hubot-redis-brain: Successfully authenticated to Redis"
+        getData()
+
+  client.on "error", (err) ->
+    if /ECONNREFUSED/.test err.message
+
+    else
+      robot.logger.error err.stack
+
+  client.on "connect", ->
+    robot.logger.debug "hubot-redis-brain: Successfully connected to Redis"
+    getData() if not info.auth
+
+  robot.brain.on 'save', (data = {}) ->
+    client.set "#{prefix}:storage", JSON.stringify data
+
+  robot.brain.on 'close', ->
+    client.quit()
+
+  # show redis keys.... for test
+  client.keys "*", (err, replies) ->
+    if err
+      console.log "error : #{err}"
+    else
+      console.log "#{replies.length} replies :"
+      replies.forEach (reply, i) ->
+        console.log "     #{i} : #{reply}"
+###########################################################################################################################################################
 
   #봇 호출 선언 부
   robot.respond /show commands/i, (response) ->
@@ -90,9 +157,16 @@ module.exports = (robot) ->
 6. search '$searchEngine' '$keyword' \n
 -> 웹 서치 ex) search google jjaekjjaek.\n\n
 
-7. run time\n
--> hso-bot이 살아 숨쉬고 있는 시간.\n\n
+7. 날씨\n
+-> 접속한 클라이언트의 현재 날씨.\n\n
+
+8. transit directions from '$출발지' to '$도착지'\n
+-> 구글 맵스를 이용한 국내 경로 찾기 ex) transit directions from suwon to seoul\n\n
+
+9. register\n
+-> bot에 자신의 정보를 저장하는 명령어들 사용법 보여줌.
 "
+
     response.reply resultTxt
 
   robot.respond /startNaver/i, (response) ->
@@ -147,9 +221,136 @@ module.exports = (robot) ->
       response.reply searchResult
 
 
-  robot.respond /run time/i, (response) ->
-    response.reply ""
+  robot.respond /날씨/i, (response) ->
+    robot.http("http://www.telize.com/geoip?")
+      .get() (err, res, body) ->
+        json = JSON.parse(body)
+        switch res.statusCode
+          when 200
+            response.reply "\nip : #{json.ip}\n국가 : #{json.country}\nisp(인터넷공급업체) : #{json.isp}\n위도 : #{json.latitude} 경도 : #{json.longitude}"
+            # lot = json.longitude
+            # lat = json.latitude
+            lat = "37.57"
+            lot = "126.98"
+            rs = dfs_xy_conv("toXY", lat, lot)
+            console.log "lat : #{rs['lat']}, lng : #{rs['lng']}"
 
+            xml2jsonCurrentWth(rs.nx, rs.ny, robot, response)
+          else
+            response.reply "There was an error getting external IP (status: #{res.statusCode})."
+
+  robot.respond /register/i, (res) ->
+    res.reply "멤버정보 입력 서비스 입니다. 참고로 본인정보는 본인만 등록할 수 있습니다.\n '@#{robot.name} regMember' 를 쓴 후 나이 성별 전화번호 주소를 순서대로 띄어쓰기해서 써주세요.\nex) @#{robot.name} regMember 1살 남자 010-1234-5678 미국 히로쿠클라우드 시스템 중 어느 한곳일 듯"
+    res.reply "삭제 역시 자기 정보만 지울 수 있습니다. '@#{robot.name} delMem' 을 입력해주세요."
+    res.reply "등록된 멤버들을 보려면 '@#{robot.name} memList' 를 입력해주세요."
+    res.reply "특정 멤버의 상세 정보를 보려면 '@#{robot.name} who is 멤버아이디' 를 입력해주세요."
+
+  robot.respond /delMem/i, (res) ->
+    userId    = res.message.user.id
+    client.hdel memberKey, userId, (err, reply) ->
+      if reply is 0
+        res.reply "등록되지 않은 멤버입니다."
+      else
+        res.reply "삭제완료 !"
+
+  robot.respond /memList/i, (res) ->
+     client.hkeys memberKey, (err, replies) ->
+       replies.forEach (reply, i) ->
+         client.hget memberKey, reply, (err, __reply) ->
+           _reply = JSON.parse __reply
+           if _reply.userId is undefined
+             res.reply "    #{i+1} : 이름 -> #{_reply.name}"
+           else
+             res.reply "   #{i+1} : 닉네임 -> #{_reply.userId}"
+
+  robot.respond /regMember (.*)/i, (res) ->
+    userId    = res.message.user.name
+    name      = res.message.user.real_name
+    email     = res.message.user.email_address
+    id        = res.message.user.id
+
+    paramStr  = res.match[1]
+    paramArr  = paramStr.split " "
+    age       = paramArr[0]
+    sex       = paramArr[1]
+    hp        = paramArr[2]
+
+    i         = 3
+    loc       = ''
+    while i < paramArr.length
+      loc += "#{paramArr[i]} "
+      i++
+
+    field     = id
+    valueObj  =
+      {
+        "userId": userId,
+        "name": name,
+        "email": email,
+        "age": age,
+        "sex": sex,
+        "hp": hp,
+        "loc": loc,
+        "id": id
+      }
+
+    value     = JSON.stringify valueObj
+
+    client.hset memberKey, field, value, (err, reply) ->
+      if reply is 0
+        res.reply "errorrrrrrr"
+      else
+        res.reply "ok"
+
+  robot.respond /who is @?([\w .\-]+)\?*$/i, (res) ->
+    name = res.match[1].trim()
+
+    client.hkeys memberKey, (err, replies) ->
+      replies.forEach (reply, i) ->
+        client.hget memberKey, reply, (err, __reply) ->
+          _reply = JSON.parse __reply
+
+          if _reply.userId is name
+            client.hget memberKey, _reply.id, (err, reply) ->
+              if reply is null
+                res.reply "#{name} is not my user !!!!!!!!!!!!"
+              else
+                result = JSON.parse(reply)
+                res.reply "#{name}님의 정보 ->\n 닉네임 : #{result.userId}\n 이름 : #{result.name}\n 나이 : #{result.age}\n 성별 : #{result.sex}\n 전화번호 : #{result.hp}\n 이메일 : #{result.email}\n slack 고유 아이디 : #{result.id}\n 거주지 : #{result.loc}"
+          else
+            res.reply "#{name} is not my user !!!!"
+
+
+  robot.respond /save (.*) (.*)/i, (res) ->
+    field = res.match[1]
+    value = res.match[2]
+
+    client.hset(brainKey, field, value)
+    res.reply "save finish"
+
+  robot.respond /get (.*)/i, (res) ->
+    field = res.match[1]
+    client.hget brainKey, field, (err, reply) ->
+      if reply is null
+        res.reply "'#{field}' dosen't have in brain.."
+      else
+        res.reply "brain result : #{reply.toString()}"
+
+  robot.respond /show brain/i, (res) ->
+    client.hkeys brainKey, (err, replies) ->
+      replies.forEach (reply, i) ->
+        res.reply "   #{i} : #{reply}"
+
+  robot.respond /del (.*)/i, (res) ->
+    field = res.match[1]
+    client.hdel brainKey, field, (err, reply) ->
+      if reply is 0
+        res.reply "'#{field}' dosen't have in brain.."
+      else
+        res.reply "delete success.."
+
+
+########################################################################################################################################################
 
   # 자체 함수 선언 부
   startNaver = (response) ->
@@ -207,6 +408,7 @@ module.exports = (robot) ->
       url = "http://www.bing.com/search?form=PRKRKO&refig=857ee60d3714404fa7a5d4dde57f0bb8&pq=china&sc=0-0&sp=-1&qs=n&sk=&q=#{keyword}"
 
     url
+########################################################################################################################################################
 
 
   # 유틸 함수 선언
@@ -329,8 +531,7 @@ module.exports = (robot) ->
     rs
 
 # xml2jsonCurrentWth
-xml2jsonCurrentWth = (nx, ny, robot) ->
-  `var today`
+xml2jsonCurrentWth = (nx, ny, robot, response) ->
   today = new Date
   dd = today.getDate()
   mm = today.getMonth() + 1
@@ -355,7 +556,7 @@ xml2jsonCurrentWth = (nx, ny, robot) ->
     dd = '0' + dd
   _nx = nx
   _ny = ny
-  apikey = 'Emz8CfMLIHnIeD7Hl6qDBtzOB5Mpt3Sgh8G9ol07R4yzQ3ffyNDX%2BTdekwX6KD2utTd7q8UbAik%2B8pgk7w3bug%3D%3D'
+  #apikey = ''
   today = yyyy + '' + mm + '' + dd
   basetime = hours + '00'
   fileName = 'http://newsky2.kma.go.kr/service/SecndSrtpdFrcstInfoService/ForecastGrib'
@@ -365,48 +566,50 @@ xml2jsonCurrentWth = (nx, ny, robot) ->
   fileName += '&nx=' + _nx + '&ny=' + _ny
   fileName += '&pageNo=1&numOfRows=6'
   fileName += '&_type=json'
-  # $.ajax
-  #   url: fileName
-  #   type: 'GET'
-  #   cache: false
-  #   success: (data) ->
-  #     myXML = rplLine(data.responseText)
-  #     indexS = myXML.indexOf('')
-  #     indexE = myXML.indexOf('')
-  #     result = myXML.substring(indexS + 3, indexE)
-  #     jsonObj = $.parseJSON('[' + result + ']')
-  #     rainsnow = jsonObj[0].response.body.items.item[0].obsrValue
-  #     sky = jsonObj[0].response.body.items.item[4].obsrValue
-  #     temp = jsonObj[0].response.body.items.item[5].obsrValue
-  #     contentText = document.getElementById('content')
-  #     contentText.innerHTML = sky + ' / ' + rainsnow + ' / ' + temp
-  #     return
-  #   error: (request, status, error) ->
-  #     alert '다시 시도해주세요.\n' + 'code:' + request.status + '\n' + 'message:' + request.responseText + '\n' + 'error:' + error
-  #     return
 
-
-  robot.http(fileName)
+  robot.http(fileName, response)
     .get() (err, res, body) ->
-      json = JSON.parse(body)
+      lgt = pty = reh = rn1 = sky = t1h = ""
+      dataSelector = (jsonData) ->
+        obs = jsonData.obsrValue
+        switch jsonData.category
+          when 'LGT' then lgt = obs
+          when 'PTY' then pty = obs
+          when 'REH' then reh = obs
+          when 'RN1' then rn1 = obs
+          when 'SKY' then sky = obs
+          when 'T1H' then t1h = obs
+          else console.log "unknwon code.. : #{jsonData.category}"
+
+      data = JSON.parse(body)
       switch res.statusCode
         when 200
+          if data.response.header.resultCode isnt '0000'
+            response.reply data.response.header.resultMsg
+            return
 
-          if body.responseText == undefined
-            return "Can't connect to weather cast service..."
+          jsonArr = data.response.body.items.item
 
-          myXML = rplLine(body.responseText)
-          indexS = myXML.indexOf('')
-          indexE = myXML.indexOf('')
-          result = myXML.substring(indexS + 3, indexE)
-          jsonObj = JSON.parse('[' + result + ']')
-          rainsnow = jsonObj[0].response.body.items.item[0].obsrValue
-          sky = jsonObj[0].response.body.items.item[4].obsrValue
-          temp = jsonObj[0].response.body.items.item[5].obsrValue
-          return "#{sky} / #{rainsnow} / #{temp}"
+          dataSelector(jsonData) for jsonData in jsonArr
+
+          #천둥번개
+          lgt = if lgt == 0 then "없음" else "있음"
+          #강수형태
+          pty = if pty == 0 then "없음" else if pty == 1 then "비" else if pty == 2 then "비/눈" else "눈"
+          #습도
+          reh = "#{reh}%"
+          #1시간 강수량
+          rn1 = if rn1 == 0 then "0mm" else if rn1 == 1 then "1mm 미만" else if rn1 == 5 then "1~4mm" else if rn1 == 10 then "5~9mm" else if rn1 == 20 then "10~19mm" else if rn1 == 40 then "20~39mm"else if rn1 == 70 then "40~69mm" else "70mm이상"
+          #하늘 상태
+          sky = if sky == 1 then "맑음" else if sky == 2 then "구름조금" else if sky ==3 then "구름많음" else "흐림"
+          #기온
+          t1h = "#{t1h}°C"
+
+          response.reply "\n현재 기온 : #{t1h}\n습도 : #{reh}\n하늘 상태 : #{sky}\n강수형태 : #{pty}\n천둥번개 : #{lgt}\n한시간 강수량 : #{rn1}"
+
         else
-          return "There was an error getting weather info (status: #{res.statusCode})."
-
+          response.reply "There was an error getting weather info (status: #{res.statusCode})."
+########################################################################################################################################################
 
 # rplLine
 rplLine = (value) ->
@@ -414,3 +617,4 @@ rplLine = (value) ->
     value.replace /\n/g, '\\n'
   else
     value
+########################################################################################################################################################
